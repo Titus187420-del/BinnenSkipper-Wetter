@@ -89,6 +89,10 @@ class Model:
     file_param: str      # "d2" or "eu" -> which suffix field to use
     probe_hour: int      # forecast hour probed to prove a run is FULLY published
     min_hourly: int = 24  # never publish a file with fewer hourly rows than this
+    # How many recent runs to try before giving up. Must span at least TWO runs
+    # that can actually pass ``probe_hour`` -- otherwise a single late run means
+    # no file at all. See the ICON-EU note below.
+    lookback_runs: int = 4
 
 
 ICON_D2 = Model(
@@ -117,6 +121,22 @@ ICON_EU = Model(
     # most ~6 h older, but with the full 120 h outlook). That is exactly the
     # behaviour that has been producing good EU files all along.
     probe_hour=120,
+    # ⚠️ DOPPELTER Rueckblick gegenueber ICON-D2, und das ist kein Feinschliff.
+    #
+    # Nur die Hauptlaeufe (00/06/12/18) erreichen +120 h, also kann nur jeder
+    # ZWEITE Kandidat ueberhaupt bestehen. Mit den vier Kandidaten von ICON-D2
+    # blieben davon zwei -- und wenn der neuere noch nicht fertig veroeffentlicht
+    # ist und der aeltere einen Aussetzer hat, entsteht GAR KEINE Datei.
+    #
+    # Das faellt nicht auf: main() bricht bei einem einzelnen fehlenden Modell
+    # absichtlich nicht ab, und upload_sftp.py laedt nur hoch, was gebaut wurde.
+    # Die alte icon-eu.json bleibt also auf dem Webspace liegen und altert still
+    # weiter, bis die App sie nach 12 Stunden verwirft und auf Bright Sky
+    # zurueckfaellt -- waehrend der Lauf gruen bleibt und ICON-D2 frisch ist.
+    #
+    # Acht Kandidaten decken vier Hauptlaeufe und damit rund einen Tag ab. Weiter
+    # zurueck waere sinnlos: der DWD raeumt seine Dateien nach ungefaehr 24 h weg.
+    lookback_runs=8,
 )
 
 MODELS = [ICON_D2, ICON_EU]
@@ -134,16 +154,24 @@ log = logging.getLogger("build_weather")
 # Run selection
 # ---------------------------------------------------------------------------
 
-def candidate_runs(model: Model, now: dt.datetime, back: int = 4) -> List[dt.datetime]:
+def candidate_runs(model: Model, now: dt.datetime,
+                   back: Optional[int] = None) -> List[dt.datetime]:
     """Return recent run datetimes (UTC), most-recent first.
 
     DWD needs time to publish a run after its nominal hour, so the newest run
     directory may exist but be incomplete. We generate several candidates and
     let the caller fall back until enough files are present.
+
+    How many candidates is a per-model question, because ``probe_hour`` decides
+    how many of them can pass at all -- for ICON-EU only every second one can.
+    Hence ``Model.lookback_runs``; ``back`` stays overridable for tests.
     """
+    if back is None:
+        back = model.lookback_runs
     runs: List[dt.datetime] = []
     # Walk backwards hour by hour, keeping only valid run hours, until we have
-    # ``back`` candidates spanning roughly the last day.
+    # ``back`` candidates. The hour cap is the hard stop: DWD deletes its files
+    # after roughly a day, so scanning further back can only waste requests.
     cursor = now.replace(minute=0, second=0, microsecond=0)
     hours_scanned = 0
     while len(runs) < back and hours_scanned < 36:

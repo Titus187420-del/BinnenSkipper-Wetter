@@ -129,7 +129,13 @@ jobs:
       # ⚠️ Ohne diesen Schritt kann der Ablauf grün werden, während die Dateien
       # an der falschen Stelle liegen. Warum das dreimal passiert ist, steht in
       # pipeline/weather/pruefe_veroeffentlicht.py.
-      - name: Gegenprobe über die öffentliche Adresse
+      #
+      # ⚠️ BEIDE Modelle prüfen. Bis zum 2026-07-28 stand hier nur icon-d2 — und
+      # weil ein einzeln fehlgeschlagenes Modell den Lauf absichtlich nicht rot
+      # macht, konnte icon-eu monatelang unbemerkt veralten. In der App war das
+      # nicht als Fehler zu erkennen: Sie fällt still auf Bright Sky zurück.
+      - name: Gegenprobe über die öffentlichen Adressen
         run: |
           python pipeline/weather/pruefe_veroeffentlicht.py \
-            "https://www.huggie.de/binnenskipper/${{ matrix.ziel }}/icon-d2.json"
+            "https://www.huggie.de/binnenskipper/${{ matrix.ziel }}/icon-d2.json" \
+            "https://www.huggie.de/binnenskipper/${{ matrix.ziel }}/icon-eu.json"
