@@ -86,12 +86,20 @@ jobs:
           # (LAKE.weather.point). Weicht hier etwas ab, zeigt das Wetter-Widget
           # einen anderen Punkt als die Wetterseite der App — und niemand käme
           # darauf, warum sich die Werte um ein Grad unterscheiden.
+          #
+          # Spalte 4 = neues Zuhause, Spalte 5 = Übergangspfad (leer = keiner).
+          #
+          # ⚠️ Der ÜBERGANGSPFAD ist nur für den Chiemsee. Dort sucht die
+          # App-Version, die gerade im Store steht. Die anderen vier Seen haben
+          # keine Nutzer mit alter Version, brauchen also keinen. Sobald die neue
+          # App-Fassung verbreitet ist, faellt die Spalte weg — und mit ihr die
+          # alten <see>-skipper-Ordner.
           SEEN="
-          chiemsee|47.88|12.45|chiemsee-skipper/weather
-          starnberg|47.909|11.311|starnberg-skipper/weather
-          ammersee|48.006|11.125|ammersee-skipper/weather
-          tegernsee|47.72|11.745|tegernsee-skipper/weather
-          brombachsee|49.132|10.9272|brombachsee-skipper/weather
+          chiemsee|47.88|12.45|binnenskipper/wetter/chiemsee|chiemsee-skipper/weather
+          starnberg|47.909|11.311|binnenskipper/wetter/starnberg|
+          ammersee|48.006|11.125|binnenskipper/wetter/ammersee|
+          tegernsee|47.72|11.745|binnenskipper/wetter/tegernsee|
+          brombachsee|49.132|10.9272|binnenskipper/wetter/brombachsee|
           "
 
           FEHLER=0
@@ -102,6 +110,7 @@ jobs:
             LAT=$(echo "$ZEILE"  | cut -d'|' -f2)
             LON=$(echo "$ZEILE"  | cut -d'|' -f3)
             ZIEL=$(echo "$ZEILE" | cut -d'|' -f4)
+            UEBERGANG=$(echo "$ZEILE" | cut -d'|' -f5)
 
             echo ""
             echo "════════════════════════════════════════════"
@@ -148,6 +157,17 @@ alter = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
 print(f'    öffentlich abrufbar, geschrieben vor {alter:.0f} Minuten')
 sys.exit(0 if alter < 30 else 1)
 "; then
+                  # Übergangskopie an den alten Platz (nur Chiemsee). Schlägt sie
+                  # fehl, ist das kein Grund, den ganzen See rot zu machen — das
+                  # neue Zuhause steht ja bereits.
+                  if [ -n "$UEBERGANG" ]; then
+                    if WEATHER_OUT_DIR="$AUSGABE" FTP_REMOTE_DIR="$UEBERGANG" \
+                         python pipeline/weather/upload_sftp.py >/dev/null; then
+                      echo "    Übergangskopie nach $UEBERGANG abgelegt"
+                    else
+                      echo "    ⚠️ Übergangskopie nach $UEBERGANG fehlgeschlagen"
+                    fi
+                  fi
                   echo "✅ $SEE fertig"
                   ERFOLG=$((ERFOLG + 1))
                 else
