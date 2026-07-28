@@ -16,15 +16,21 @@ name: Wetter für alle Seen
 # die Wetter-Pipeline — kein App-Quelltext. Die SFTP-Zugangsdaten stehen in den
 # Repository-Secrets und sind auch in einem öffentlichen Projekt nicht sichtbar.
 #
-# ⚠️ ZWEITE ERSPARNIS: EIN Auftrag für alle fünf Seen statt fünf Aufträge.
-# Das Aufwendige ist die Einrichtung (ecCodes + Python + Pakete, gut zwei
-# Minuten). Die läuft hier EINMAL, danach werden die fünf Seen in einer Schleife
-# gebaut. Fünf getrennte Aufträge würden die Einrichtung fünfmal bezahlen.
+# ⚠️ EIN AUFTRAG JE SEE, NICHT ALLE FÜNF NACHEINANDER.
 #
-# ⚠️ Die STURMWARNLEUCHTEN baut dieser Ablauf bewusst NICHT mehr.
-# Das macht seit dem 2026-07 der 5-Minuten-Cron auf huggie.de
-# (chiemsee-skipper/stormlight.php) für alle Seen — häufiger und ohne
-# Actions-Minuten. Zwei Schreiber auf dieselbe Datei wären nur ein Wettlauf.
+# Der erste Entwurf baute alle fünf Seen in einer Schleife, um die Einrichtung
+# (ecCodes + Python, gut zwei Minuten) nur einmal zu bezahlen. Sparsam gedacht,
+# aber falsch: In einem ÖFFENTLICHEN Projekt sind die Minuten kostenlos — es
+# zählt allein die Uhrzeit. Nacheinander brauchten die fünf Seen zusammen
+# 31 Minuten und liefen ins 30-Minuten-Limit (2026-07-28).
+#
+# Nebeneinander läuft jeder See in seinem eigenen Auftrag: rund sieben Minuten
+# statt einunddreißig, und ein hängender See blockiert die anderen nicht mehr.
+#
+# ⚠️ Die STURMWARNLEUCHTEN baut dieser Ablauf bewusst NICHT.
+# Das macht der 5-Minuten-Cron auf huggie.de (chiemsee-skipper/stormlight.php)
+# für alle Seen — häufiger, ohne Actions-Minuten und unabhängig davon, ob GitHub
+# gerade läuft. Zwei Schreiber auf dieselbe Datei wären nur ein Wettlauf.
 
 on:
   schedule:
@@ -42,9 +48,46 @@ permissions:
   contents: read
 
 jobs:
-  bauen-und-hochladen:
+  wetter:
+    name: ${{ matrix.see }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      # ⚠️ fail-fast aus: Ein See, für den der DWD seinen Modelllauf noch nicht
+      # fertig veröffentlicht hat, darf die anderen vier nicht mit abbrechen.
+      fail-fast: false
+      matrix:
+        include:
+          # ⚠️ Koordinaten EXAKT aus src/config/lakes/<see>.ts (LAKE.weather.point).
+          # Weicht hier etwas ab, zeigt das Wetter-Widget einen anderen Punkt als
+          # die Wetterseite der App.
+          #
+          # ⚠️ "ziel" ist RELATIV zum Startverzeichnis des SFTP-Zugangs. Der
+          # startet in /huggie/binnenskipper, deshalb "wetter/<see>" und nicht
+          # "binnenskipper/wetter/<see>". Wer den Zugang wechselt, muss das hier
+          # mitziehen — sonst entsteht ein verschachtelter Ordner und der Lauf
+          # bleibt trotzdem grün. Dagegen prüft der letzte Schritt gegen.
+          - see: chiemsee
+            lat: "47.88"
+            lon: "12.45"
+            ziel: wetter/chiemsee
+          - see: starnberg
+            lat: "47.909"
+            lon: "11.311"
+            ziel: wetter/starnberg
+          - see: ammersee
+            lat: "48.006"
+            lon: "11.125"
+            ziel: wetter/ammersee
+          - see: tegernsee
+            lat: "47.72"
+            lon: "11.745"
+            ziel: wetter/tegernsee
+          - see: brombachsee
+            lat: "49.132"
+            lon: "10.9272"
+            ziel: wetter/brombachsee
+
     steps:
       - name: Auschecken
         uses: actions/checkout@v4
@@ -66,96 +109,27 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r pipeline/weather/requirements.txt
 
-      - name: Alle fünf Seen bauen und hochladen
+      - name: Vorhersage bauen
+        env:
+          LAKE_LAT: ${{ matrix.lat }}
+          LAKE_LON: ${{ matrix.lon }}
+          WEATHER_OUT_DIR: dist
+        run: python pipeline/weather/build_weather.py
+
+      - name: Auf den Webspace laden
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
           FTP_PORT: ${{ secrets.FTP_PORT }}
+          WEATHER_OUT_DIR: dist
+          FTP_REMOTE_DIR: ${{ matrix.ziel }}
+        run: python pipeline/weather/upload_sftp.py
+
+      # ⚠️ Ohne diesen Schritt kann der Ablauf grün werden, während die Dateien
+      # an der falschen Stelle liegen. Warum das dreimal passiert ist, steht in
+      # pipeline/weather/pruefe_veroeffentlicht.py.
+      - name: Gegenprobe über die öffentliche Adresse
         run: |
-          set -u
-          # See | Breite | Länge | Zielordner auf dem Webspace
-          #
-          # ⚠️ Die Zielordner sind EXAKT die, aus denen die App liest
-          # (LAKE.hosting.baseUrl + "/weather"). Wer hier etwas umbenennt, muss
-          # src/config/lakes/<see>.ts mit ändern UND eine neue App-Version
-          # veröffentlichen — sonst holt die App tagelang nichts mehr und niemand
-          # merkt es, weil sie still auf Bright Sky zurückfällt.
-          #
-          # ⚠️ Die Koordinaten sind EXAKT die aus src/config/lakes/<see>.ts
-          # (LAKE.weather.point). Weicht hier etwas ab, zeigt das Wetter-Widget
-          # einen anderen Punkt als die Wetterseite der App — und niemand käme
-          # darauf, warum sich die Werte um ein Grad unterscheiden.
-          #
-          # ⚠️ Die Zielpfade sind RELATIV zum Startverzeichnis des SFTP-Zugangs.
-          # Der Zugang startet in /huggie/binnenskipper, deshalb steht hier
-          # "wetter/<see>" und nicht "binnenskipper/wetter/<see>". Wer den Zugang
-          # wechselt, muss diese Spalte mitziehen — sonst entsteht ein
-          # verschachtelter Ordner und der Lauf bleibt trotzdem gruen. Genau das
-          # ist am 2026-07-16, am 19.07. und noch einmal am 28.07. passiert.
-          # Dagegen prueft der Ablauf unten die oeffentliche Adresse gegen.
-          #
-          # Den Uebergang fuer die App-Version im Store (Chiemsee-Wetter unter
-          # chiemsee-skipper/weather/) erledigt stormlight.php auf dem Server:
-          # Dieser Zugang kommt dort nicht hin, PHP schon.
-          SEEN="
-          chiemsee|47.88|12.45|wetter/chiemsee
-          starnberg|47.909|11.311|wetter/starnberg
-          ammersee|48.006|11.125|wetter/ammersee
-          tegernsee|47.72|11.745|wetter/tegernsee
-          brombachsee|49.132|10.9272|wetter/brombachsee
-          "
-
-          FEHLER=0
-          ERFOLG=0
-
-          for ZEILE in $(echo "$SEEN" | tr -d ' ' | grep -v '^$'); do
-            SEE=$(echo "$ZEILE"  | cut -d'|' -f1)
-            LAT=$(echo "$ZEILE"  | cut -d'|' -f2)
-            LON=$(echo "$ZEILE"  | cut -d'|' -f3)
-            ZIEL=$(echo "$ZEILE" | cut -d'|' -f4)
-
-            echo ""
-            echo "════════════════════════════════════════════"
-            echo "  $SEE  ($LAT, $LON)  →  $ZIEL"
-            echo "════════════════════════════════════════════"
-
-            # Jeder See in einen eigenen Ordner, damit ein Fehlschlag nicht die
-            # Dateien des vorigen Sees mit hochlädt.
-            AUSGABE="dist/$SEE"
-            rm -rf "$AUSGABE"
-            mkdir -p "$AUSGABE"
-
-            # ⚠️ Ein See darf die anderen nicht mitreißen. Schlägt einer fehl
-            # (DWD-Lauf noch nicht veröffentlicht, GRIB-Datei kaputt), laufen die
-            # übrigen weiter und der Ablauf wird am Ende trotzdem rot.
-            if LAKE_LAT="$LAT" LAKE_LON="$LON" WEATHER_OUT_DIR="$AUSGABE" \
-                 python pipeline/weather/build_weather.py; then
-              if WEATHER_OUT_DIR="$AUSGABE" FTP_REMOTE_DIR="$ZIEL" \
-                   python pipeline/weather/upload_sftp.py; then
-
-                # ⚠️ GEGENPROBE ÜBER DIE ÖFFENTLICHE ADRESSE.
-                # Warum das sein muss, steht ausführlich in
-                # pipeline/weather/pruefe_veroeffentlicht.py.
-                if python pipeline/weather/pruefe_veroeffentlicht.py \
-                     "https://www.huggie.de/binnenskipper/$ZIEL/icon-d2.json"; then
-                  echo "✅ $SEE fertig"
-                  ERFOLG=$((ERFOLG + 1))
-                else
-                  FEHLER=$((FEHLER + 1))
-                fi
-              else
-                echo "❌ $SEE: Hochladen fehlgeschlagen"
-                FEHLER=$((FEHLER + 1))
-              fi
-            else
-              echo "❌ $SEE: Bauen fehlgeschlagen"
-              FEHLER=$((FEHLER + 1))
-            fi
-          done
-
-          echo ""
-          echo "════════════════════════════════════════════"
-          echo "  $ERFOLG von 5 Seen erfolgreich, $FEHLER fehlgeschlagen"
-          echo "════════════════════════════════════════════"
-          [ "$FEHLER" -eq 0 ]
+          python pipeline/weather/pruefe_veroeffentlicht.py \
+            "https://www.huggie.de/binnenskipper/${{ matrix.ziel }}/icon-d2.json"
