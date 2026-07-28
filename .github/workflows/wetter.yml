@@ -87,19 +87,23 @@ jobs:
           # einen anderen Punkt als die Wetterseite der App — und niemand käme
           # darauf, warum sich die Werte um ein Grad unterscheiden.
           #
-          # Spalte 4 = neues Zuhause, Spalte 5 = Übergangspfad (leer = keiner).
+          # ⚠️ Die Zielpfade sind RELATIV zum Startverzeichnis des SFTP-Zugangs.
+          # Der Zugang startet in /huggie/binnenskipper, deshalb steht hier
+          # "wetter/<see>" und nicht "binnenskipper/wetter/<see>". Wer den Zugang
+          # wechselt, muss diese Spalte mitziehen — sonst entsteht ein
+          # verschachtelter Ordner und der Lauf bleibt trotzdem gruen. Genau das
+          # ist am 2026-07-16, am 19.07. und noch einmal am 28.07. passiert.
+          # Dagegen prueft der Ablauf unten die oeffentliche Adresse gegen.
           #
-          # ⚠️ Der ÜBERGANGSPFAD ist nur für den Chiemsee. Dort sucht die
-          # App-Version, die gerade im Store steht. Die anderen vier Seen haben
-          # keine Nutzer mit alter Version, brauchen also keinen. Sobald die neue
-          # App-Fassung verbreitet ist, faellt die Spalte weg — und mit ihr die
-          # alten <see>-skipper-Ordner.
+          # Den Uebergang fuer die App-Version im Store (Chiemsee-Wetter unter
+          # chiemsee-skipper/weather/) erledigt stormlight.php auf dem Server:
+          # Dieser Zugang kommt dort nicht hin, PHP schon.
           SEEN="
-          chiemsee|47.88|12.45|binnenskipper/wetter/chiemsee|chiemsee-skipper/weather
-          starnberg|47.909|11.311|binnenskipper/wetter/starnberg|
-          ammersee|48.006|11.125|binnenskipper/wetter/ammersee|
-          tegernsee|47.72|11.745|binnenskipper/wetter/tegernsee|
-          brombachsee|49.132|10.9272|binnenskipper/wetter/brombachsee|
+          chiemsee|47.88|12.45|wetter/chiemsee
+          starnberg|47.909|11.311|wetter/starnberg
+          ammersee|48.006|11.125|wetter/ammersee
+          tegernsee|47.72|11.745|wetter/tegernsee
+          brombachsee|49.132|10.9272|wetter/brombachsee
           "
 
           FEHLER=0
@@ -110,7 +114,6 @@ jobs:
             LAT=$(echo "$ZEILE"  | cut -d'|' -f2)
             LON=$(echo "$ZEILE"  | cut -d'|' -f3)
             ZIEL=$(echo "$ZEILE" | cut -d'|' -f4)
-            UEBERGANG=$(echo "$ZEILE" | cut -d'|' -f5)
 
             echo ""
             echo "════════════════════════════════════════════"
@@ -144,7 +147,7 @@ jobs:
                 #
                 # Deshalb wird jetzt die Datei abgerufen, die die App abruft,
                 # und geprüft, ob sie WIRKLICH gerade neu geschrieben wurde.
-                ADRESSE="https://www.huggie.de/$ZIEL/icon-d2.json"
+                ADRESSE="https://www.huggie.de/binnenskipper/$ZIEL/icon-d2.json"
                 GESCHRIEBEN=$(curl -fsS --max-time 30 "$ADRESSE" \
                   | python3 -c "import json,sys; print(json.load(sys.stdin)['updated'])" 2>/dev/null || echo "")
                 if [ -z "$GESCHRIEBEN" ]; then
@@ -157,17 +160,6 @@ alter = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
 print(f'    öffentlich abrufbar, geschrieben vor {alter:.0f} Minuten')
 sys.exit(0 if alter < 30 else 1)
 "; then
-                  # Übergangskopie an den alten Platz (nur Chiemsee). Schlägt sie
-                  # fehl, ist das kein Grund, den ganzen See rot zu machen — das
-                  # neue Zuhause steht ja bereits.
-                  if [ -n "$UEBERGANG" ]; then
-                    if WEATHER_OUT_DIR="$AUSGABE" FTP_REMOTE_DIR="$UEBERGANG" \
-                         python pipeline/weather/upload_sftp.py >/dev/null; then
-                      echo "    Übergangskopie nach $UEBERGANG abgelegt"
-                    else
-                      echo "    ⚠️ Übergangskopie nach $UEBERGANG fehlgeschlagen"
-                    fi
-                  fi
                   echo "✅ $SEE fertig"
                   ERFOLG=$((ERFOLG + 1))
                 else
