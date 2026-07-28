@@ -16,3 +16,14 @@ cfgrib==0.9.14.1
 eccodes==2.38.3
 # tzdata provides the Europe/Berlin zone for zoneinfo on minimal runners.
 tzdata==2024.2
+
+# ⚠️ paramiko lädt die fertigen JSON-Dateien per SFTP auf den Webspace
+# (upload_sftp.py). Im alten Ablauf wurde es in einem EIGENEN Schritt per
+# "pip install paramiko" nachinstalliert und stand deshalb nie hier drin. Beim
+# Zusammenlegen zu einem Ablauf ging diese Zeile verloren — alle fünf Seen
+# wurden gebaut und keiner hochgeladen (2026-07-28). Hier gehört es hin.
+#
+# Bewusst 3.x und nicht die neueste 5.0: Das ist die Reihe, mit der die alte
+# Pipeline monatelang lief. Ein Sprung über zwei Hauptversionen gehört nicht in
+# einen Fehlerbehebung.
+paramiko==3.5.1
