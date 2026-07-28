@@ -1,0 +1,140 @@
+name: Wetter für alle Seen
+
+# EINE Pipeline für ALLE fünf Seen von BinnenSkipper.
+#
+# ⚠️ WARUM DIESES EIGENE, ÖFFENTLICHE PROJEKT?
+#
+# Vorher liefen drei getrennte Abläufe in zwei PRIVATEN Projekten
+# (ChiemseeSailing: Chiemsee; StarnbergSailing: Starnberg + Ammersee), jeder alle
+# drei Stunden. Private Projekte haben im kostenlosen GitHub-Tarif 2.000
+# Actions-Minuten pro Monat. Drei Abläufe × 8 Läufe am Tag × ~30 Tage haben das
+# im Juli 2026 aufgebraucht — danach schlugen ALLE Wetterläufe fehl.
+#
+# Öffentliche Projekte haben dagegen unbegrenzte, kostenlose Minuten auf den
+# Standard-Runnern (GitHub-Doku: "GitHub Actions usage is free … for public
+# repositories that use standard GitHub-hosted runners"). Deshalb liegt hier NUR
+# die Wetter-Pipeline — kein App-Quelltext. Die SFTP-Zugangsdaten stehen in den
+# Repository-Secrets und sind auch in einem öffentlichen Projekt nicht sichtbar.
+#
+# ⚠️ ZWEITE ERSPARNIS: EIN Auftrag für alle fünf Seen statt fünf Aufträge.
+# Das Aufwendige ist die Einrichtung (ecCodes + Python + Pakete, gut zwei
+# Minuten). Die läuft hier EINMAL, danach werden die fünf Seen in einer Schleife
+# gebaut. Fünf getrennte Aufträge würden die Einrichtung fünfmal bezahlen.
+#
+# ⚠️ Die STURMWARNLEUCHTEN baut dieser Ablauf bewusst NICHT mehr.
+# Das macht seit dem 2026-07 der 5-Minuten-Cron auf huggie.de
+# (chiemsee-skipper/stormlight.php) für alle Seen — häufiger und ohne
+# Actions-Minuten. Zwei Schreiber auf dieselbe Datei wären nur ein Wettlauf.
+
+on:
+  schedule:
+    # Alle drei Stunden, um :40. Die App verwirft Modelldaten, die älter als
+    # 12 Stunden sind, und fällt dann auf DWD/Bright Sky zurück — drei Stunden
+    # lassen also reichlich Luft, auch wenn ein Lauf einmal ausfällt.
+    - cron: "40 1-23/3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: wetter
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  bauen-und-hochladen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Auschecken
+        uses: actions/checkout@v4
+
+      - name: ecCodes installieren
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeccodes0 libeccodes-dev
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/weather/requirements.txt
+
+      - name: Python-Pakete installieren
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r pipeline/weather/requirements.txt
+
+      - name: Alle fünf Seen bauen und hochladen
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+        run: |
+          set -u
+          # See | Breite | Länge | Zielordner auf dem Webspace
+          #
+          # ⚠️ Die Zielordner sind EXAKT die, aus denen die App liest
+          # (LAKE.hosting.baseUrl + "/weather"). Wer hier etwas umbenennt, muss
+          # src/config/lakes/<see>.ts mit ändern UND eine neue App-Version
+          # veröffentlichen — sonst holt die App tagelang nichts mehr und niemand
+          # merkt es, weil sie still auf Bright Sky zurückfällt.
+          #
+          # ⚠️ Die Koordinaten sind EXAKT die aus src/config/lakes/<see>.ts
+          # (LAKE.weather.point). Weicht hier etwas ab, zeigt das Wetter-Widget
+          # einen anderen Punkt als die Wetterseite der App — und niemand käme
+          # darauf, warum sich die Werte um ein Grad unterscheiden.
+          SEEN="
+          chiemsee|47.88|12.45|chiemsee-skipper/weather
+          starnberg|47.909|11.311|starnberg-skipper/weather
+          ammersee|48.006|11.125|ammersee-skipper/weather
+          tegernsee|47.72|11.745|tegernsee-skipper/weather
+          brombachsee|49.132|10.9272|brombachsee-skipper/weather
+          "
+
+          FEHLER=0
+          ERFOLG=0
+
+          for ZEILE in $(echo "$SEEN" | tr -d ' ' | grep -v '^$'); do
+            SEE=$(echo "$ZEILE"  | cut -d'|' -f1)
+            LAT=$(echo "$ZEILE"  | cut -d'|' -f2)
+            LON=$(echo "$ZEILE"  | cut -d'|' -f3)
+            ZIEL=$(echo "$ZEILE" | cut -d'|' -f4)
+
+            echo ""
+            echo "════════════════════════════════════════════"
+            echo "  $SEE  ($LAT, $LON)  →  $ZIEL"
+            echo "════════════════════════════════════════════"
+
+            # Jeder See in einen eigenen Ordner, damit ein Fehlschlag nicht die
+            # Dateien des vorigen Sees mit hochlädt.
+            AUSGABE="dist/$SEE"
+            rm -rf "$AUSGABE"
+            mkdir -p "$AUSGABE"
+
+            # ⚠️ Ein See darf die anderen nicht mitreißen. Schlägt einer fehl
+            # (DWD-Lauf noch nicht veröffentlicht, GRIB-Datei kaputt), laufen die
+            # übrigen weiter und der Ablauf wird am Ende trotzdem rot.
+            if LAKE_LAT="$LAT" LAKE_LON="$LON" WEATHER_OUT_DIR="$AUSGABE" \
+                 python pipeline/weather/build_weather.py; then
+              if WEATHER_OUT_DIR="$AUSGABE" FTP_REMOTE_DIR="$ZIEL" \
+                   python pipeline/weather/upload_sftp.py; then
+                echo "✅ $SEE fertig"
+                ERFOLG=$((ERFOLG + 1))
+              else
+                echo "❌ $SEE: Hochladen fehlgeschlagen"
+                FEHLER=$((FEHLER + 1))
+              fi
+            else
+              echo "❌ $SEE: Bauen fehlgeschlagen"
+              FEHLER=$((FEHLER + 1))
+            fi
+          done
+
+          echo ""
+          echo "════════════════════════════════════════════"
+          echo "  $ERFOLG von 5 Seen erfolgreich, $FEHLER fehlgeschlagen"
+          echo "════════════════════════════════════════════"
+          [ "$FEHLER" -eq 0 ]
