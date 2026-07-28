@@ -121,8 +121,41 @@ jobs:
                  python pipeline/weather/build_weather.py; then
               if WEATHER_OUT_DIR="$AUSGABE" FTP_REMOTE_DIR="$ZIEL" \
                    python pipeline/weather/upload_sftp.py; then
-                echo "✅ $SEE fertig"
-                ERFOLG=$((ERFOLG + 1))
+
+                # ⚠️ GEGENPROBE ÜBER DIE ÖFFENTLICHE ADRESSE.
+                #
+                # Ein erfolgreicher SFTP-Upload beweist NICHT, dass die Datei
+                # dort liegt, wo die App sie sucht. Die Zielpfade sind relativ
+                # zum Anmelde-Ordner des SFTP-Kontos — und der ist je nach Konto
+                # der Hauptordner ODER schon "chiemsee-skipper/". Im zweiten Fall
+                # entsteht "chiemsee-skipper/chiemsee-skipper/weather": Der Lauf
+                # bleibt grün, und die App bekommt tagelang alte Daten, ohne dass
+                # es irgendwo auffällt. Genau das ist am 2026-07-16 und noch
+                # einmal am 2026-07-28 passiert.
+                #
+                # Deshalb wird jetzt die Datei abgerufen, die die App abruft,
+                # und geprüft, ob sie WIRKLICH gerade neu geschrieben wurde.
+                ADRESSE="https://www.huggie.de/$ZIEL/icon-d2.json"
+                GESCHRIEBEN=$(curl -fsS --max-time 30 "$ADRESSE" \
+                  | python3 -c "import json,sys; print(json.load(sys.stdin)['updated'])" 2>/dev/null || echo "")
+                if [ -z "$GESCHRIEBEN" ]; then
+                  echo "❌ $SEE: $ADRESSE ist nicht abrufbar — die Datei liegt woanders"
+                  FEHLER=$((FEHLER + 1))
+                elif python3 -c "
+import sys, datetime
+t = datetime.datetime.fromisoformat('$GESCHRIEBEN'.replace('Z','+00:00'))
+alter = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
+print(f'    öffentlich abrufbar, geschrieben vor {alter:.0f} Minuten')
+sys.exit(0 if alter < 30 else 1)
+"; then
+                  echo "✅ $SEE fertig"
+                  ERFOLG=$((ERFOLG + 1))
+                else
+                  echo "❌ $SEE: Unter $ADRESSE liegt eine ALTE Datei ($GESCHRIEBEN)."
+                  echo "   Der Upload ging also woandershin. Prüfe FTP_REMOTE_DIR"
+                  echo "   gegen den Anmelde-Ordner des SFTP-Kontos."
+                  FEHLER=$((FEHLER + 1))
+                fi
               else
                 echo "❌ $SEE: Hochladen fehlgeschlagen"
                 FEHLER=$((FEHLER + 1))
