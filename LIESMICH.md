@@ -45,25 +45,54 @@ privaten.
 
 3. Unter *Actions* den Ablauf **„Wetter für alle Seen"** einmal von Hand starten
    (*Run workflow*) und zusehen, ob alle fünf Seen grün werden.
-4. Erst **danach** in ChiemseeSailing und StarnbergSailing die alten Abläufe
-   abschalten (*Actions → … → Disable workflow*). Nicht vorher — sonst gibt es
-   eine Lücke.
+4. Erst **danach** in StarnbergSailing die beiden alten Abläufe abschalten
+   (*Actions → „DWD ICON weather (Starnberg)" bzw. „(Ammersee)" → ⋯ → Disable
+   workflow*). Nicht vorher — sonst gibt es eine Lücke.
+
+   ⚠️ **ChiemseeSailing dabei NICHT abschalten** — Begründung unten unter
+   „Die alte Chiemsee-Adresse muss bestehen bleiben".
+
+   Erledigt am 2026-07-30, nachdem beide Abläufe wochenlang Fehlermails
+   geschickt hatten: Sie luden in Ordner hoch, die es seit dem Webspace-Umbau
+   nicht mehr gibt.
 
 ## Welche Seen, welche Ziele
 
-| See | Koordinaten | Zielordner auf huggie.de |
-|---|---|---|
-| Chiemsee | 47.88, 12.45 | `chiemsee-skipper/weather` |
-| Starnberger See | 47.909, 11.311 | `starnberg-skipper/weather` |
-| Ammersee | 48.006, 11.125 | `ammersee-skipper/weather` |
-| Tegernsee | 47.72, 11.745 | `tegernsee-skipper/weather` |
-| Großer Brombachsee | 49.132, 10.9272 | `brombachsee-skipper/weather` |
+Der SFTP-Zugang startet in `/huggie/binnenskipper`. Die Spalte „Ziel" ist
+deshalb **relativ dazu** — genau so steht sie in `wetter.yml` unter `ziel:`.
 
-⚠️ **Koordinaten und Zielordner müssen zur App passen.** Beide stehen in
-`src/config/lakes/<see>.ts` (`weather.point` bzw. `hosting.baseUrl`). Wer hier
-etwas ändert, ohne die App anzupassen, bekommt keinen Fehler zu sehen: Die App
-verwirft Modelldaten, die älter als zwölf Stunden sind, und zeigt still die
-normale DWD-Vorhersage weiter.
+| See | Koordinaten | Ziel (relativ) | Öffentliche Adresse |
+|---|---|---|---|
+| Chiemsee | 47.88, 12.45 | `wetter/chiemsee` | `huggie.de/binnenskipper/wetter/chiemsee/` |
+| Starnberger See | 47.909, 11.311 | `wetter/starnberg` | `huggie.de/binnenskipper/wetter/starnberg/` |
+| Ammersee | 48.006, 11.125 | `wetter/ammersee` | `huggie.de/binnenskipper/wetter/ammersee/` |
+| Tegernsee | 47.72, 11.745 | `wetter/tegernsee` | `huggie.de/binnenskipper/wetter/tegernsee/` |
+| Großer Brombachsee | 49.132, 10.9272 | `wetter/brombachsee` | `huggie.de/binnenskipper/wetter/brombachsee/` |
+
+⚠️ **Nicht `binnenskipper/wetter/<see>` eintragen.** Der Zugang startet bereits
+dort; der Pfad würde sich verdoppeln und die Dateien landeten in
+`binnenskipper/binnenskipper/wetter/…`. Der Lauf bliebe trotzdem grün — dagegen
+prüft der letzte Schritt (`pruefe_veroeffentlicht.py`) über die öffentlichen
+Adressen gegen.
+
+⚠️ **Koordinaten und Ziel müssen zur App passen.** In der App stehen sie in
+`src/config/lakes/<see>.ts` (`weather.point`) und in `src/config/index.ts`
+(`HOSTED.weatherModel`). Wer hier etwas ändert, ohne die App anzupassen,
+bekommt keinen Fehler zu sehen: Die App verwirft Modelldaten, die älter als
+zwölf Stunden sind, und zeigt still die normale DWD-Vorhersage weiter.
+
+### ⚠️ Die alte Chiemsee-Adresse muss bestehen bleiben
+
+`huggie.de/chiemsee-skipper/weather/` wird von der **Fassung im Store
+(1.0.0, „Chiemsee Skipper")** gelesen — die kennt die neue Adresse nicht und
+kann sich nicht selbst korrigieren. Diese Adresse und der Ablauf, der sie
+befüllt (`weather.yml` im privaten Projekt ChiemseeSailing), dürfen erst
+abgeschaltet werden, wenn 1.0.1 die alte Fassung praktisch überall abgelöst
+hat.
+
+Die alten Adressen `starnberg-skipper/weather` und `ammersee-skipper/weather`
+liest dagegen **niemand** — die Starnberg-App war nie im Store. Ihre Ordner
+wurden beim Webspace-Umbau am 2026-07-26 entfernt und liefern seither 404.
 
 ## Was dieser Ablauf NICHT macht
 
@@ -85,3 +114,31 @@ Häufigste Ursache: Der DWD hat den neuen Modelllauf noch nicht vollständig
 veröffentlicht. Das erledigt sich beim nächsten Lauf drei Stunden später von
 selbst. Die App überbrückt das ohnehin, weil ihre Modelldaten zwölf Stunden lang
 gültig bleiben.
+
+## Messwerte am Brombachsee
+
+Neben den Vorhersagen holt der Ablauf am **Großen Brombachsee** die Werte einer
+echten Wetterstation: `pipeline/weather/build_messung.py` liest die Datei
+`daten.ini` des Wasserwirtschaftsamts Ansbach und legt daraus `messung.json`
+neben die Vorhersagedateien.
+
+**Warum nur dort:** Am Brombachsee liegen die nächsten DWD-Stationen 12 und
+16 km entfernt. Die Station am Hauptdamm ist die einzige Messung am See selbst.
+Julia Burger (Wasserwirtschaftsamt Ansbach) hat die Werte am 2026-08-20 von
+sich aus angeboten.
+
+⚠️ **Lizenz CC BY-NC-ND 4.0.** Quellenangabe zwingend, nicht kommerziell, nicht
+verändert. In der App heißt das: Der Messwert steht **außerhalb der
+Pro-Schranke** und die Quelle wird sichtbar angeschrieben.
+
+⚠️ **Einheiten** (am 2026-08-29 an der Webseite des Amtes geprüft): `wgesch` ist
+**Meter je Sekunde**, nicht km/h — die Seite zeigt daneben „4.1 m/s (7.97 kn)".
+Die App rechnet intern in m/s, der Wert passt also direkt; die DWD-Vorhersage
+kommt dagegen in km/h und muss durch 3,6 geteilt werden.
+
+⚠️ **Der Schritt darf den Lauf nie kippen.** Schlägt der Abruf fehl, endet das
+Skript mit 0 und schreibt nichts. Eine fehlende `messung.json` lässt die App auf
+die Vorhersage zurückfallen; ein abgebrochener Lauf nähme ihr beides. Aus
+demselben Grund gilt in der App eine Altersgrenze von einer Stunde — die
+Ammerseeboje des LfU steht seit Wochen still, und ein Wind von vorgestern ist
+schlechter als eine frische Vorhersage.

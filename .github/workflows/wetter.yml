@@ -116,6 +116,17 @@ jobs:
           WEATHER_OUT_DIR: dist
         run: python pipeline/weather/build_weather.py
 
+      # Messwerte der Station am Hauptdamm — nur am Brombachsee, dort ist es die
+      # einzige Windmessung am See selbst. Schlaegt der Abruf fehl, laeuft der
+      # Ablauf weiter: eine fehlende messung.json laesst die App auf die
+      # Vorhersage zurueckfallen, ein abgebrochener Lauf naehme ihr beides.
+      - name: Messwerte holen (nur Brombachsee)
+        if: matrix.see == 'brombachsee'
+        env:
+          MESSUNG_SEE: ${{ matrix.see }}
+          WEATHER_OUT_DIR: dist
+        run: python pipeline/weather/build_messung.py
+
       - name: Auf den Webspace laden
         env:
           FTP_HOST: ${{ secrets.FTP_HOST }}
