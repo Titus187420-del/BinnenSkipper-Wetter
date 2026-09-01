@@ -58,6 +58,26 @@ jobs:
       # Datei — die App faellt dann auf die Vorhersage zurueck. Genau so ist es
       # in build_messung.py angelegt; ein roter Lauf alle paar Stunden, weil das
       # Amt kurz nicht erreichbar war, hilft niemandem.
+      # ⚠️ paramiko wird fuer den SFTP-Upload gebraucht (upload_sftp.py).
+      #
+      # Beim ersten Lauf am 2026-09-01 fehlte dieser Schritt: Messwerte holen
+      # und Datei pruefen liefen durch, der Upload scheiterte. Genau derselbe
+      # Fehler steht schon in requirements.txt beschrieben — dort ging die
+      # paramiko-Zeile am 2026-07-28 verloren, und alle fuenf Seen wurden
+      # gebaut, aber keiner hochgeladen.
+      #
+      # Die Version wird AUS requirements.txt gezogen statt hier ein zweites Mal
+      # hingeschrieben. Sonst laufen die beiden Ablaeufe irgendwann mit
+      # verschiedenen Fassungen — und das faellt erst auf, wenn einer bricht.
+      #
+      # Die schweren Pakete der Vorhersage (numpy, xarray, cfgrib, eccodes)
+      # bleiben bewusst draussen: build_messung.py und
+      # pruefe_veroeffentlicht.py kommen mit der Standardbibliothek aus.
+      - name: paramiko installieren
+        run: |
+          python -m pip install --upgrade pip
+          grep '^paramiko' pipeline/weather/requirements.txt | xargs python -m pip install
+
       - name: Messwerte holen
         env:
           MESSUNG_SEE: brombachsee
