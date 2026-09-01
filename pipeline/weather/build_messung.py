@@ -33,10 +33,64 @@ SEITE  = "https://www.wwa-an.bayern.de/themen/ueberleitung_donau_main/webcam/ind
 log = logging.getLogger("messung")
 
 
-def hole(url: str, timeout: int = 30) -> str:
+def hole(url: str, timeout: int = 30) -> tuple[str, str | None]:
+    """Inhalt und der Last-Modified-Kopf der Antwort.
+
+    ⚠️ Der Kopf wird gebraucht, WEIL DAS ZEITFELD IN DER DATEI NICHT STIMMT —
+    siehe zeitstempel() weiter unten."""
     req = urllib.request.Request(url, headers={"User-Agent": "BinnenSkipper/1.0 (service@skipperfriends.de)"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+        return r.read().decode("utf-8", "replace"), r.headers.get("Last-Modified")
+
+
+def aus_http_datum(roh: str | None) -> str | None:
+    """„Tue, 01 Sep 2026 09:45:04 GMT" -> ISO 8601 in deutscher Ortszeit."""
+    if not roh:
+        return None
+    try:
+        naiv = dt.datetime.strptime(roh, "%a, %d %b %Y %H:%M:%S %Z")
+    except ValueError:
+        log.warning("Last-Modified unlesbar: %r", roh)
+        return None
+    utc = naiv.replace(tzinfo=dt.timezone.utc)
+    sommer = dt.datetime(utc.year, 3, 31) <= utc.replace(tzinfo=None) < dt.datetime(utc.year, 10, 25)
+    return utc.astimezone(dt.timezone(dt.timedelta(hours=2 if sommer else 1))).isoformat()
+
+
+def zeitstempel(werte: dict[str, str], last_modified: str | None) -> str | None:
+    """Wann die Messung entstanden ist.
+
+    ⚠️ LAST-MODIFIED SCHLAEGT DAS FELD `date` IN DER DATEI.
+
+    Am 2026-09-01 gefunden: Die daten.ini enthielt `date = "01.09.26 10:51"`,
+    war laut Last-Modified aber um 11:45 geschrieben — und die Webseite des
+    Amtes zeigte zur selben Zeit „Messwerte am 01.09.26 - 11:45" bei exakt den
+    Werten aus der Datei (7,7 m/s, 258°, 18,8 °C). Das Feld `date` hinkte also
+    54 Minuten hinterher, waehrend Datei und Anzeige aktuell waren.
+
+    Folge in der App: Sie verwirft Messwerte, die aelter als eine Stunde sind
+    (HOECHSTALTER_MS) — mit dem falschen Zeitstempel war der Wert also schon
+    beim Abholen fast tot, und die Kachel meldete dauerhaft „zurzeit keine
+    aktuellen Messwerte". Kein Taktproblem der Pipeline, sondern ein falsches
+    Feld.
+
+    Deshalb: Last-Modified zuerst, `date` nur als Rueckfall. Liegen beide weit
+    auseinander, steht das im Protokoll — dann hat sich beim Amt etwas
+    geaendert und man sollte nachsehen.
+    """
+    aus_kopf = aus_http_datum(last_modified)
+    aus_feld = als_zeit(werte.get("date", ""))
+    if aus_kopf and aus_feld:
+        abstand = abs(
+            (dt.datetime.fromisoformat(aus_kopf) - dt.datetime.fromisoformat(aus_feld)).total_seconds()
+        )
+        if abstand > 900:
+            log.warning(
+                "Zeitangaben laufen auseinander: Datei sagt %s, Last-Modified %s (%.0f min) "
+                "— es gilt Last-Modified.",
+                aus_feld, aus_kopf, abstand / 60,
+            )
+    return aus_kopf or aus_feld
 
 
 def lies_ini(text: str) -> dict[str, str]:
@@ -81,12 +135,13 @@ def main() -> int:
         return 0
 
     try:
-        werte = lies_ini(hole(QUELLE))
+        roh, last_modified = hole(QUELLE)
+        werte = lies_ini(roh)
     except Exception as exc:  # noqa: BLE001
         log.error("Abruf fehlgeschlagen: %s", exc)
         return 0          # ⚠️ NIE den ganzen Lauf kippen: die Vorhersage ist wichtiger
 
-    zeit = als_zeit(werte.get("date", ""))
+    zeit = zeitstempel(werte, last_modified)
     wind = zahl(werte, "wgesch")
     if zeit is None or wind is None:
         log.error("unbrauchbare Daten: %r — keine Datei geschrieben", werte)

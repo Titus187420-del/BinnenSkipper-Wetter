@@ -1,0 +1,99 @@
+name: Messwerte Brombachsee
+
+# Holt NUR die Messwerte der Wetterstation am Hauptdamm und legt sie als
+# messung.json auf den Webspace.
+#
+# ⚠️ WARUM DAS EIN EIGENER ABLAUF IST
+# Der grosse Wetterlauf (wetter.yml) holt Modelldaten fuer fuenf Seen und laeuft
+# deshalb nur alle drei Stunden. Fuer eine MESSUNG ist das viel zu selten: Die
+# App verwirft einen Messwert nach einer Stunde (HOECHSTALTER_MS in
+# src/services/messung.ts), weil ein alter Windwert auf einem See schlimmer ist
+# als eine frische Vorhersage. Damit konnte die Kachel gar nicht funktionieren —
+# am 2026-09-01 war der Wert auf dem Server 233 Minuten alt, waehrend die Quelle
+# selbst auf 11:30 Uhr stand. Titus sah deshalb nur „zurzeit keine aktuellen
+# Messwerte".
+#
+# Dieser Ablauf ist schlank: kein ecCodes, keine Modelldaten, eine kleine Datei.
+#
+# ⚠️ WARUM 15 MINUTEN UND NICHT FUENF
+# Fuenf Minuten ist zwar das Minimum, das GitHub zulaesst, bringt hier aber
+# nichts: Geplante Ablaeufe werden bei Last routinemaessig 5 bis 30 Minuten
+# verzoegert, in Spitzenzeiten laenger, und einzelne Laeufe fallen ohne Spur
+# aus. Ein Fuenf-Minuten-Takt erzeugt also vor allem Warteschlange. Mit 15
+# Minuten ist der Wert typisch 15 bis 45 Minuten alt und bleibt damit meist
+# innerhalb der Stunde, die die App gelten laesst.
+#
+# ⚠️ Die Minuten sind bewusst VERSETZT (4, 19, 34, 49). Zur vollen Stunde ist
+# die Last auf GitHubs Laufumgebung am hoechsten; wer dort plant, wartet am
+# laengsten.
+#
+# Kosten: keine. Das Projekt ist oeffentlich, und fuer oeffentliche Projekte
+# rechnet GitHub keine Minuten ab.
+
+on:
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: messung
+  cancel-in-progress: false
+
+jobs:
+  messung:
+    name: Hauptdamm Brombachsee
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ⚠️ Schlaegt der Abruf fehl, endet der Ablauf trotzdem gruen und ohne
+      # Datei — die App faellt dann auf die Vorhersage zurueck. Genau so ist es
+      # in build_messung.py angelegt; ein roter Lauf alle paar Stunden, weil das
+      # Amt kurz nicht erreichbar war, hilft niemandem.
+      - name: Messwerte holen
+        env:
+          MESSUNG_SEE: brombachsee
+          WEATHER_OUT_DIR: dist
+        run: python pipeline/weather/build_messung.py
+
+      # Ohne Datei nichts hochladen — sonst wuerde der SFTP-Schritt scheitern
+      # oder, schlimmer, eine leere Ablage anlegen.
+      - name: Gibt es eine Datei?
+        id: pruefen
+        run: |
+          if [ -f dist/messung.json ]; then
+            echo "da=ja" >> "$GITHUB_OUTPUT"
+            echo "Inhalt:"; cat dist/messung.json
+          else
+            echo "da=nein" >> "$GITHUB_OUTPUT"
+            echo "Keine messung.json — die Quelle war nicht erreichbar oder lieferte nichts Brauchbares."
+          fi
+
+      # ⚠️ Der Pfad ist RELATIV zum Startordner des SFTP-Zugangs (/huggie/
+      # binnenskipper), deshalb "wetter/brombachsee". Ein falscher Pfad schreibt
+      # daneben und der Lauf bleibt trotzdem gruen — dagegen prueft der letzte
+      # Schritt.
+      - name: Auf den Webspace laden
+        if: steps.pruefen.outputs.da == 'ja'
+        env:
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASS: ${{ secrets.FTP_PASS }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          WEATHER_OUT_DIR: dist
+          FTP_REMOTE_DIR: wetter/brombachsee
+        run: python pipeline/weather/upload_sftp.py
+
+      - name: Gegenprobe über die öffentliche Adresse
+        if: steps.pruefen.outputs.da == 'ja'
+        run: |
+          python pipeline/weather/pruefe_veroeffentlicht.py \
+            "https://www.huggie.de/binnenskipper/wetter/brombachsee/messung.json"
