@@ -112,8 +112,13 @@ jobs:
           FTP_REMOTE_DIR: wetter/brombachsee
         run: python pipeline/weather/upload_sftp.py
 
+      # ⚠️ 45 Minuten statt der ueblichen 30: Geprueft wird hier der MESSzeitpunkt,
+      # nicht der Schreibzeitpunkt. Die Station meldet etwa alle 15 Minuten, dazu
+      # kommt die Verzoegerung des geplanten Laufs — bei 30 Minuten waere der
+      # Ablauf regelmaessig rot, obwohl alles stimmt.
       - name: Gegenprobe über die öffentliche Adresse
         if: steps.pruefen.outputs.da == 'ja'
         run: |
           python pipeline/weather/pruefe_veroeffentlicht.py \
-            "https://www.huggie.de/binnenskipper/wetter/brombachsee/messung.json"
+            "https://www.huggie.de/binnenskipper/wetter/brombachsee/messung.json" \
+            --minuten 45

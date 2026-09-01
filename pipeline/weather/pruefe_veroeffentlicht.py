@@ -51,9 +51,19 @@ def pruefe(adresse: str, max_alter: float) -> bool:
         print("    Die Datei liegt also nicht dort, wo die App sie sucht.")
         return False
 
-    geschrieben = daten.get("updated")
+    # ⚠️ Zwei Dateiformate, zwei Feldnamen.
+    #
+    # Die Vorhersagen (icon-d2.json, icon-eu.json) tragen den Schreibzeitpunkt
+    # in `updated`. Die Messwerte einer Station (messung.json) haben kein
+    # `updated` — dort steht in `time` der MESSzeitpunkt, und das ist die Zahl,
+    # auf die es ankommt: Eine Datei, die frisch geschrieben wurde, aber eine
+    # zwei Stunden alte Messung enthaelt, nuetzt der App nichts.
+    #
+    # Am 2026-09-01 lief der neue Messwert-Ablauf deshalb rot, obwohl die Datei
+    # richtig und frisch auf dem Server lag.
+    geschrieben = daten.get("updated") or daten.get("time")
     if not geschrieben:
-        print(f"    FEHLER: {adresse} enthält kein Feld 'updated'")
+        print(f"    FEHLER: {adresse} enthält weder 'updated' noch 'time'")
         return False
 
     try:
@@ -75,7 +85,13 @@ def pruefe(adresse: str, max_alter: float) -> bool:
         return False
 
     stunden = len(daten.get("hourly", []))
-    print(f"    frisch: geschrieben vor {alter_min:.0f} Minuten, {stunden} Stunden Vorhersage")
+    if stunden:
+        print(f"    frisch: geschrieben vor {alter_min:.0f} Minuten, {stunden} Stunden Vorhersage")
+    else:
+        # Messwertdatei — keine Vorhersagestunden, dafuer der Messwert selbst.
+        wind = daten.get("windSpeedMs")
+        zusatz = f", {wind} m/s" if wind is not None else ""
+        print(f"    frisch: Stand vor {alter_min:.0f} Minuten{zusatz}")
     return True
 
 
