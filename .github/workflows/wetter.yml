@@ -133,6 +133,20 @@ jobs:
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
           FTP_PORT: ${{ secrets.FTP_PORT }}
+          # ⚠️ OHNE DIESE ZEILE IST DAS SECRET WIRKUNGSLOS.
+          #
+          # Titus hat FTP_HOST_KEY am 2026-08-29 hinterlegt, trotzdem meldete
+          # jeder Lauf weiter „FTP_HOST_KEY ist nicht gesetzt" — weil kein
+          # Ablauf ihn an upload_sftp.py durchreichte. Ein Secret, das nur im
+          # Tresor liegt, prueft nichts. Ohne die Pruefung koennte sich ein
+          # fremder Server dazwischenschalten und das Webspace-Passwort im
+          # Klartext mitschneiden.
+          #
+          # Erst im Messwert-Ablauf erprobt (messung.yml), weil ein falscher
+          # Fingerprint den Upload abbricht — hier haetten dann alle fuenf Seen
+          # keine Vorhersage mehr bekommen. Der Lauf ed40e16 am 2026-09-01 war
+          # gruen, der Schluessel stimmt also.
+          FTP_HOST_KEY: ${{ secrets.FTP_HOST_KEY }}
           WEATHER_OUT_DIR: dist
           FTP_REMOTE_DIR: ${{ matrix.ziel }}
         run: python pipeline/weather/upload_sftp.py
