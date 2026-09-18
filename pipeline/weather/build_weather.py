@@ -29,6 +29,7 @@ Both live under .../grib/<RR>/<param_lowercase>/ (the directory is always lowerc
 
 from __future__ import annotations
 
+import base64
 import bz2
 import dataclasses
 import datetime as dt
@@ -54,6 +55,33 @@ LAT = float(os.environ.get("LAKE_LAT", "47.87"))
 LON = float(os.environ.get("LAKE_LON", "12.45"))
 
 BASE_URL = "https://opendata.dwd.de/weather/nwp"
+
+# ---------------------------------------------------------------------------
+# Wetterkarte der App (Pro): Windgitter statt eines einzelnen Punkts
+# ---------------------------------------------------------------------------
+# Ausschnitt "minLon,minLat,maxLon,maxLat" um den See (Ufer + 3,5 km), gesetzt
+# je See in .github/workflows/wetter.yml. Leer = keine Karte.
+#
+# Aus denselben GRIB-Dateien, die fuer den Punkt ohnehin geladen werden, wird
+# zusaetzlich dieser Ausschnitt gelesen — es kommt KEIN weiterer Download dazu.
+# Nur ICON-D2 (2,2 km), und nur Wind, Boeen und Regen.
+KARTE_BOX_ROH = os.environ.get("KARTE_BOX", "").strip()
+KARTE_PARAMS = ("u_10m", "v_10m", "vmax_10m", "tot_prec")
+KARTE_DATEI = "wind-karte.json"
+
+
+def karte_box() -> Optional[Tuple[float, float, float, float]]:
+    if not KARTE_BOX_ROH:
+        return None
+    try:
+        teile = [float(x) for x in KARTE_BOX_ROH.split(",")]
+    except ValueError:
+        log.error("KARTE_BOX unlesbar: %r", KARTE_BOX_ROH)
+        return None
+    if len(teile) != 4 or teile[0] >= teile[2] or teile[1] >= teile[3]:
+        log.error("KARTE_BOX muss 'minLon,minLat,maxLon,maxLat' sein: %r", KARTE_BOX_ROH)
+        return None
+    return teile[0], teile[1], teile[2], teile[3]
 
 # Params we try to fetch. Key = the DWD parameter directory name (lowercase).
 # ``d2_suffix`` / ``eu_suffix`` are the parameter tokens as they appear IN the
@@ -267,7 +295,17 @@ def download_grib(url: str) -> Optional[bytes]:
 
 
 def value_at_point(grib_bytes: bytes) -> Optional[float]:
-    """Decode a single-message GRIB2 blob and return the value nearest Chiemsee.
+    """Decode a single-message GRIB2 blob and return the value nearest the lake."""
+    return lese_grib(grib_bytes, None)[0]
+
+
+def lese_grib(grib_bytes: bytes,
+              box: Optional[Tuple[float, float, float, float]]
+              ) -> Tuple[Optional[float], Optional[dict]]:
+    """Wert am Seepunkt und — wenn ``box`` gesetzt — der Ausschnitt fuer die Karte.
+
+    Der Ausschnitt kommt als {"lat": [...], "lon": [...], "werte": 2-D-Feld}
+    zurueck, beide Achsen aufsteigend (Sueden -> Norden, Westen -> Osten).
 
     We write to a temp file because cfgrib/eccodes read from a path. The
     ``regular-lat-lon`` grid is a plain rectilinear lat/lon mesh, so nearest
@@ -299,12 +337,39 @@ def value_at_point(grib_bytes: bytes) -> Optional[float]:
         ix = int(np.abs(lons - target_lon).argmin())
         val = da.isel(latitude=iy, longitude=ix).values
         val = float(np.asarray(val).reshape(-1)[0])
-        if not math.isfinite(val):
-            return None
-        return val
+        punkt = val if math.isfinite(val) else None
+
+        # ⚠️ Der Kartenausschnitt hat seinen EIGENEN Fehlerfang: Er darf den
+        # Punktwert — die eigentliche Vorhersage — nie mitreissen. Beim ersten
+        # Versuch (2026-09-18, lokal) scheiterte er an tot_prec, und mit einem
+        # gemeinsamen Fehlerfang waere der Regen der Vorhersage gleich mit
+        # verschwunden.
+        ausschnitt = None
+        if box is not None:
+            try:
+                lons_n = np.where(lons > 180.0, lons - 360.0, lons)
+                ix_box = np.where((lons_n >= box[0]) & (lons_n <= box[2]))[0]
+                iy_box = np.where((lats >= box[1]) & (lats <= box[3]))[0]
+                if len(ix_box) >= 2 and len(iy_box) >= 2:
+                    werte = np.asarray(da.isel(latitude=iy_box, longitude=ix_box).values, dtype=float)
+                    # tot_prec traegt vier Viertelstunden je Datei (Schritt h:00,
+                    # h:15, h:30, h:45). Wie beim Punkt oben zaehlt der ERSTE —
+                    # das ist die volle Stunde.
+                    werte = werte.reshape(-1, len(iy_box), len(ix_box))[0]
+                    oy = np.argsort(lats[iy_box])
+                    ox = np.argsort(lons_n[ix_box])
+                    ausschnitt = {
+                        "lat": lats[iy_box][oy],
+                        "lon": lons_n[ix_box][ox],
+                        "werte": werte[np.ix_(oy, ox)],
+                    }
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Kartenausschnitt nicht lesbar: %s", exc)
+                ausschnitt = None
+        return punkt, ausschnitt
     except Exception as exc:  # noqa: BLE001 - cfgrib raises many types
         log.warning("GRIB decode failed: %s", exc)
-        return None
+        return None, None
     finally:
         try:
             os.unlink(path)
@@ -326,8 +391,14 @@ def forecast_hours(model: Model) -> List[int]:
 
 
 def fetch_param_series(model: Model, run: dt.datetime, param: Param,
-                       hours: Iterable[int]) -> Dict[int, float]:
-    """Download every available forecast hour of one parameter -> {hour: value}."""
+                       hours: Iterable[int],
+                       boxen: Optional[Dict[int, dict]] = None) -> Dict[int, float]:
+    """Download every available forecast hour of one parameter -> {hour: value}.
+
+    Mit ``boxen`` wird aus derselben Datei zusaetzlich der Kartenausschnitt je
+    Stunde abgelegt (siehe KARTE_BOX).
+    """
+    box = karte_box() if boxen is not None else None
     series: Dict[int, float] = {}
     consecutive_misses = 0
     for fh in hours:
@@ -342,9 +413,11 @@ def fetch_param_series(model: Model, run: dt.datetime, param: Param,
                 break
             continue
         consecutive_misses = 0
-        val = value_at_point(raw)
+        val, ausschnitt = lese_grib(raw, box)
         if val is not None:
             series[fh] = val
+        if boxen is not None and ausschnitt is not None:
+            boxen[fh] = ausschnitt
     log.info("[%s] %s: %d/%d hours read", model.name, param.key,
              len(series), len(list(hours)))
     return series
@@ -473,13 +546,16 @@ def round_or_none(v: Optional[float], ndigits: int = 1) -> Optional[float]:
 
 
 def build_model_json(model: Model, run: dt.datetime,
-                     now: dt.datetime) -> Optional[dict]:
+                     now: dt.datetime,
+                     karte: Optional[Dict[str, Dict[int, dict]]] = None) -> Optional[dict]:
     hours = forecast_hours(model)
 
     # Fetch each parameter's series. Abort only if a *required* one is empty.
+    # ``karte`` sammelt nebenbei die Ausschnitte fuer die Wetterkarte.
     series: Dict[str, Dict[int, float]] = {}
     for p in PARAMS:
-        s = fetch_param_series(model, run, p, hours)
+        boxen = karte.setdefault(p.key, {}) if karte is not None and p.key in KARTE_PARAMS else None
+        s = fetch_param_series(model, run, p, hours, boxen)
         if p.required and not s:
             log.error("[%s] required param %s missing entirely -- aborting model",
                       model.name, p.key)
@@ -572,6 +648,109 @@ def build_model_json(model: Model, run: dt.datetime,
     }
 
 
+def _b64(feld: np.ndarray) -> str:
+    return base64.b64encode(feld.astype(np.uint8).tobytes()).decode("ascii")
+
+
+def build_windkarte(roh: Dict[str, Dict[int, dict]], run: dt.datetime,
+                    now: dt.datetime) -> Optional[dict]:
+    """Das Windgitter fuer die Wetterkarte der App.
+
+    Je Stunde und Groesse ein Feld aus Bytes (Base64), Zeile fuer Zeile von
+    Sueden nach Norden, in jeder Zeile von Westen nach Osten:
+      wind      Mittelwind in 0,5-m/s-Schritten (0..254)
+      richtung  Richtung, AUS der der Wind kommt, in 2°-Schritten (0..179)
+      boeen     staerkste Boee der Stunde in 0,5-m/s-Schritten
+      regen     Niederschlag der Stunde in 0,1-mm-Schritten (0..254)
+    255 heisst ueberall: kein Wert.
+
+    Bytes statt Zahlenlisten, weil der Webspace JSON unkomprimiert ausliefert
+    (geprueft 2026-09-18): So bleibt die Datei auch fuer den groessten
+    Ausschnitt (Chiemsee, 31 x 29 Punkte, 49 Stunden) bei rund 240 KB.
+    """
+    u = roh.get("u_10m", {})
+    v = roh.get("v_10m", {})
+    g = roh.get("vmax_10m", {})
+    tp = roh.get("tot_prec", {})
+    stunden = sorted(h for h in u if h in v)
+    if len(stunden) < 12:
+        log.warning("[wind-karte] nur %d Stunden mit Wind -- keine Karte", len(stunden))
+        return None
+    ref = u[stunden[0]]
+    ny, nx = ref["werte"].shape
+    lat = ref["lat"]
+    lon = ref["lon"]
+
+    def passt(eintrag: Optional[dict]) -> bool:
+        return eintrag is not None and eintrag["werte"].shape == (ny, nx)
+
+    zeiten: List[str] = []
+    wind: List[str] = []
+    richtung: List[str] = []
+    boeen: List[str] = []
+    regen: List[str] = []
+    leer = np.full((ny, nx), 255, dtype=np.uint8)
+    vorher: Optional[int] = None
+    for h in stunden:
+        if not (passt(u[h]) and passt(v[h])):
+            continue
+        uu = u[h]["werte"]
+        vv = v[h]["werte"]
+        spd = np.hypot(uu, vv)
+        von = (np.degrees(np.arctan2(-uu, -vv)) + 360.0) % 360.0
+        ok = np.isfinite(spd)
+        w_b = np.where(ok, np.clip(np.rint(spd * 2.0), 0, 254), 255)
+        r_b = np.where(ok, np.rint(von / 2.0) % 180, 255)
+
+        if h in g and passt(g[h]):
+            gg = g[h]["werte"]
+            b_b = np.where(np.isfinite(gg), np.clip(np.rint(gg * 2.0), 0, 254), 255)
+        else:
+            b_b = leer
+
+        # tot_prec ist seit Laufbeginn aufsummiert — die Stunde ist die Differenz.
+        if h in tp and passt(tp[h]):
+            jetzt_mm = tp[h]["werte"]
+            if vorher is not None and vorher in tp and passt(tp[vorher]):
+                schritt = max(1, h - vorher)
+                mm = np.clip(jetzt_mm - tp[vorher]["werte"], 0.0, None) / schritt
+            else:
+                mm = np.clip(jetzt_mm, 0.0, None)
+            p_b = np.where(np.isfinite(mm), np.clip(np.rint(mm * 10.0), 0, 254), 255)
+        else:
+            p_b = leer
+
+        zeiten.append(iso(run + dt.timedelta(hours=h)))
+        wind.append(_b64(w_b))
+        richtung.append(_b64(r_b))
+        boeen.append(_b64(b_b))
+        regen.append(_b64(p_b))
+        vorher = h
+
+    if len(zeiten) < 12:
+        log.warning("[wind-karte] nur %d vollstaendige Stunden -- keine Karte", len(zeiten))
+        return None
+    return {
+        "version": 1,
+        "model": "icon-d2",
+        "run": iso(run),
+        "updated": iso(now),
+        "grid": {
+            "lon0": round(float(lon[0]), 5),
+            "lat0": round(float(lat[0]), 5),
+            "dLon": round(float(np.mean(np.diff(lon))), 6),
+            "dLat": round(float(np.mean(np.diff(lat))), 6),
+            "nx": int(nx),
+            "ny": int(ny),
+        },
+        "times": zeiten,
+        "wind": wind,
+        "richtung": richtung,
+        "boeen": boeen,
+        "regen": regen,
+    }
+
+
 def build_daily(hourly: List[dict]) -> List[dict]:
     """Aggregate hourly rows into per-local-day summaries.
 
@@ -653,8 +832,10 @@ def main() -> int:
         if run is None:
             failures += 1
             continue
+        karte: Optional[Dict[str, Dict[int, dict]]] = (
+            {} if model is ICON_D2 and karte_box() is not None else None)
         try:
-            payload = build_model_json(model, run, now)
+            payload = build_model_json(model, run, now, karte)
         except Exception as exc:  # noqa: BLE001
             log.exception("[%s] unexpected error: %s", model.name, exc)
             payload = None
@@ -679,6 +860,23 @@ def main() -> int:
             json.dump(payload, fh, ensure_ascii=False, separators=(",", ":"))
         log.info("[%s] wrote %s (%d hourly, %d daily)", model.name, path,
                  len(payload["hourly"]), len(payload["daily"]))
+
+        # Die Wetterkarte hängt am ICON-D2-Lauf. Scheitert sie, bleibt die
+        # Vorhersage trotzdem gültig — die Gegenprobe im Ablauf meldet eine
+        # veraltete Karte gesondert.
+        if karte:
+            try:
+                wk = build_windkarte(karte, run, now)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("[wind-karte] unexpected error: %s", exc)
+                wk = None
+            if wk is not None:
+                wk_pfad = os.path.join(out_dir, KARTE_DATEI)
+                with open(wk_pfad, "w", encoding="utf-8") as fh:
+                    json.dump(wk, fh, ensure_ascii=False, separators=(",", ":"))
+                log.info("[wind-karte] wrote %s (%d hours, %dx%d grid, %d bytes)", wk_pfad,
+                         len(wk["times"]), wk["grid"]["nx"], wk["grid"]["ny"],
+                         os.path.getsize(wk_pfad))
 
     if failures == len(MODELS):
         log.error("all models failed -- exiting non-zero")

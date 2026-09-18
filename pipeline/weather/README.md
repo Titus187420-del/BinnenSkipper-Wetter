@@ -23,6 +23,7 @@ environment variables**, so one pipeline serves any lake:
 | `LAKE_NAME_MATCH` | build_stormlight.py (lowercase binnenSee name fallback) | chiemsee |
 | `WEATHER_OUT_DIR` | both (output dir) | dist/weather |
 | `FTP_REMOTE_DIR` | upload_sftp.py (remote target, relative to SFTP home) | weather |
+| `KARTE_BOX` | build_weather.py (map cut-out `minLon,minLat,maxLon,maxLat` → `wind-karte.json`) | — (empty = no map) |
 
 `.github/workflows/weather.yml` sets these for the **Starnberger See**
 (47.909 / 11.311, WarncellID 209904000 "STB"). Add a lake by copying that env
@@ -309,3 +310,24 @@ likely spots:
   (47.87, 12.45); verify it lands on the lake and not a neighbouring cell.
 
 Read the run logs (they're verbose by design) and iterate.
+
+## Wind map for the app (`wind-karte.json`, since 2026-09-18)
+
+With `KARTE_BOX` set, `build_weather.py` also keeps an ICON-D2 cut-out from
+the SAME GRIB files it downloads for the point forecast (no extra downloads)
+and writes `wind-karte.json`: per forecast hour, wind speed, wind
+direction (from), gust and hourly precipitation as base64 byte grids (see
+`build_windkarte()` for the exact encoding). The app reads it in
+`src/services/windKarteDaten.ts`; change the format in BOTH places and bump
+`version`. The workflow's final check verifies that the file on the webspace is
+fresh, like the two forecast files.
+
+The box is exactly the app's offline map of the lake (`LAKE.geo.bounds` in
+`src/config/lakes/<see>.ts`): the app never zooms out further than that map,
+so arrows cover everything a user can see. The largest lake (Chiemsee,
+31 x 29 points, 49 hours) makes a file of about 240 KB.
+
+⚠️ `tot_prec` carries four quarter-hour steps per file (h:00, h:15, h:30, h:45).
+Point and cut-out both use the FIRST step, the full hour. The cut-out has its
+own error handling so that a failure there can never take the point forecast
+down with it.
