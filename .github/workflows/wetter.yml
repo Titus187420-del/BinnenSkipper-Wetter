@@ -50,8 +50,14 @@ permissions:
 jobs:
   wetter:
     name: ${{ matrix.see }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # ⚠️ FEST auf 24.04, nicht ubuntu-latest: GitHub stellt „latest" ab dem
+    # 19.10.2026 schrittweise auf Ubuntu 26.04 um, und dort koennten die
+    # ecCodes-Pakete anders heissen — dann fiele die Vorhersage fuer alle fuenf
+    # Seen aus. Umstellen erst nach einem Probelauf auf 26.04.
+    runs-on: ubuntu-24.04
+    # Vorhersage bauen ~8 min, Hochladen bis zu ~14 min Wiederholungen
+    # (upload_sftp.py), dazu die Gegenprobe.
+    timeout-minutes: 38
     strategy:
       # ⚠️ fail-fast aus: Ein See, für den der DWD seinen Modelllauf noch nicht
       # fertig veröffentlicht hat, darf die anderen vier nicht mit abbrechen.
@@ -101,7 +107,7 @@ jobs:
 
     steps:
       - name: Auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: ecCodes installieren
         run: |
@@ -109,7 +115,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libeccodes0 libeccodes-dev
 
       - name: Python einrichten
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip

@@ -42,15 +42,17 @@ concurrency:
 jobs:
   messung:
     name: Hauptdamm Brombachsee
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # Fest auf 24.04 wie wetter.yml (GitHub stellt „latest" ab 19.10.2026 um).
+    runs-on: ubuntu-24.04
+    # Hochladen wiederholt sich bei einem Aussetzer des Webspace bis zu ~14 min.
+    timeout-minutes: 22
 
     steps:
       - name: Auschecken
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Python einrichten
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 

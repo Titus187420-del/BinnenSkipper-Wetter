@@ -28,6 +28,17 @@ chiemsee-skipper web folder (feedback.php etc. sit right there), so the remote
 dir is just "weather" -> served at huggie.de/chiemsee-skipper/weather/.
 
 Exit codes: 0 ok, 1 config/no files, 2 authentication failed, 3 other SFTP error.
+
+WIEDERHOLEN (seit 2026-09-19): Lehnt der Server die Anmeldung ab oder ist er
+nicht erreichbar, wird nach 1, 3 und 10 Minuten erneut versucht (zusammen rund
+14 Minuten), bevor der Lauf rot wird. Anlass: In der Nacht zum 19.09. lehnte
+der Webspace zwischen etwa 2:40 und 3:10 Uhr jede Anmeldung ab — bei beiden
+Zugaengen (auch der alten ChiemseeSailing-Pipeline), mit dem richtigen
+Passwort; um 7:57 Uhr ging es wieder. Die alte Meldung „FTP_USER / FTP_PASS
+pruefen" fuehrte da in die Irre. NICHT wiederholt wird ein falscher
+Server-Fingerprint: Das ist ein Sicherheitsabbruch, kein Aussetzer.
+SFTP_WARTEN (Sekunden, durch Kommas getrennt) aendert die Wartezeiten, z. B.
+fuer einen schnellen Test.
 """
 
 from __future__ import annotations
@@ -39,8 +50,11 @@ import hmac
 import os
 import posixpath
 import sys
+import time
 
 import paramiko
+
+WARTEN_STANDARD = (60, 180, 600)
 
 
 def _clean(value: str | None) -> str:
@@ -48,6 +62,25 @@ def _clean(value: str | None) -> str:
     if not value:
         return ""
     return value.replace("\r", "").replace("\n", "").strip()
+
+
+def _wartezeiten() -> tuple[int, ...]:
+    roh = _clean(os.environ.get("SFTP_WARTEN"))
+    if not roh:
+        return WARTEN_STANDARD
+    try:
+        return tuple(max(0, int(x)) for x in roh.split(",") if x.strip())
+    except ValueError:
+        return WARTEN_STANDARD
+
+
+class _Aussetzer(Exception):
+    """Der Server war nicht erreichbar oder hat die Anmeldung abgelehnt — neu versuchen."""
+
+    def __init__(self, code: int, meldung: str) -> None:
+        super().__init__(meldung)
+        self.code = code
+        self.meldung = meldung
 
 
 def main() -> int:
@@ -72,12 +105,50 @@ def main() -> int:
     print(f"user length={len(user)} pass length={len(password)}")
     print(f"Connecting to {host}:{port} as <user> -> uploading {len(files)} file(s) to {remote_dir}/")
 
-    transport = paramiko.Transport((host, port))
+    warten = _wartezeiten()
+    versuche = len(warten) + 1
+    for nr in range(1, versuche + 1):
+        try:
+            return _hochladen(host, port, user, password, files, remote_dir)
+        except _Aussetzer as fehler:
+            if nr < versuche:
+                pause = warten[nr - 1]
+                print(f"::warning::Versuch {nr} von {versuche}: {fehler.meldung} -- neuer Versuch in {pause} s.")
+                time.sleep(pause)
+                continue
+            gesamt = sum(warten) // 60
+            if fehler.code == 2:
+                print(
+                    "::error::SFTP authentication failed: Der Server hat die Anmeldung auch nach "
+                    f"{versuche} Versuchen ueber {gesamt} Minuten abgelehnt. Klappt der naechste Lauf "
+                    "wieder, lag es am Server des Anbieters (z. B. naechtliche Wartung). Haelt es an: "
+                    "FTP_USER / FTP_PASS pruefen -- genau die Werte, mit denen WinSCP sich anmeldet.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"::error::SFTP upload failed nach {versuche} Versuchen ueber {gesamt} Minuten: "
+                    f"{fehler.meldung}",
+                    file=sys.stderr,
+                )
+            return fehler.code
+    return 3
+
+
+def _hochladen(host: str, port: int, user: str, password: str, files: list[str], remote_dir: str) -> int:
+    """Ein Versuch. Wirft _Aussetzer, wenn es sich lohnt, es gleich noch einmal zu versuchen."""
+    try:
+        transport = paramiko.Transport((host, port))
+    except Exception as exc:  # noqa: BLE001 - Verbindung kam gar nicht zustande
+        raise _Aussetzer(3, f"Server nicht erreichbar ({exc})") from exc
     try:
         # SICHERHEIT: Erst die Identitaet des Servers pruefen, DANN das Passwort senden.
         # Ohne diese Pruefung koennte sich ein fremder Server dazwischenschalten
         # (Man-in-the-Middle) und das Webspace-Passwort im Klartext mitschneiden.
-        transport.start_client(timeout=20)
+        try:
+            transport.start_client(timeout=20)
+        except Exception as exc:  # noqa: BLE001 - Aussetzer beim Verbindungsaufbau
+            raise _Aussetzer(3, f"Verbindungsaufbau gescheitert ({exc})") from exc
         host_key = transport.get_remote_server_key()
         fingerprint = base64.b64encode(
             hashlib.sha256(host_key.asbytes()).digest()
@@ -102,13 +173,8 @@ def main() -> int:
             print("::notice::FTP_HOST_KEY = %s" % fingerprint)
         try:
             transport.auth_password(username=user, password=password)
-        except paramiko.AuthenticationException:
-            print(
-                "::error::SFTP authentication failed (server rejected user/password). "
-                "Set FTP_USER / FTP_PASS to exactly the values that log in with WinSCP.",
-                file=sys.stderr,
-            )
-            return 2
+        except paramiko.AuthenticationException as exc:
+            raise _Aussetzer(2, "Server hat die Anmeldung abgelehnt") from exc
 
         sftp = paramiko.SFTPClient.from_transport(transport)
         assert sftp is not None
@@ -131,9 +197,10 @@ def main() -> int:
         sftp.close()
         print("SFTP upload OK")
         return 0
-    except Exception as exc:  # noqa: BLE001 - surface any SFTP/transport error clearly
-        print(f"::error::SFTP upload failed: {exc}", file=sys.stderr)
-        return 3
+    except _Aussetzer:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Abbruch mitten im Hochladen: ebenfalls neu versuchen
+        raise _Aussetzer(3, f"Hochladen abgebrochen ({exc})") from exc
     finally:
         transport.close()
 
