@@ -126,6 +126,18 @@ jobs:
           FTP_REMOTE_DIR: wetter/brombachsee
         run: python pipeline/weather/upload_sftp.py
 
+      - name: Zusätzlich zu ALL-INKL laden (FTPS)
+        # Übergang Strato → ALL-INKL (seit 11.10.2026): dieselben Dateien gehen zusätzlich per FTPS
+        # an den neuen Webspace (upload_ftps.py, nur Standardbibliothek). Zielordner wie oben.
+        if: steps.pruefen.outputs.da == 'ja'
+        env:
+          FTP_HOST: ${{ secrets.ALLINKL_FTP_HOST }}
+          FTP_USER: ${{ secrets.ALLINKL_FTP_USER }}
+          FTP_PASS: ${{ secrets.ALLINKL_FTP_PASS }}
+          WEATHER_OUT_DIR: dist
+          FTP_REMOTE_DIR: wetter/brombachsee
+        run: python pipeline/weather/upload_ftps.py
+
       # ⚠️ 45 Minuten statt der ueblichen 30: Geprueft wird hier der MESSzeitpunkt,
       # nicht der Schreibzeitpunkt. Die Station meldet etwa alle 15 Minuten, dazu
       # kommt die Verzoegerung des geplanten Laufs — bei 30 Minuten waere der

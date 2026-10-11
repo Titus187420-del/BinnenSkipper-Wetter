@@ -171,6 +171,17 @@ jobs:
           FTP_REMOTE_DIR: ${{ matrix.ziel }}
         run: python pipeline/weather/upload_sftp.py
 
+      - name: Zusätzlich zu ALL-INKL laden (FTPS)
+        # Übergang Strato → ALL-INKL (seit 11.10.2026): dieselben Dateien gehen zusätzlich per FTPS
+        # an den neuen Webspace (upload_ftps.py, nur Standardbibliothek). Zielordner wie oben.
+        env:
+          FTP_HOST: ${{ secrets.ALLINKL_FTP_HOST }}
+          FTP_USER: ${{ secrets.ALLINKL_FTP_USER }}
+          FTP_PASS: ${{ secrets.ALLINKL_FTP_PASS }}
+          WEATHER_OUT_DIR: dist
+          FTP_REMOTE_DIR: ${{ matrix.ziel }}
+        run: python pipeline/weather/upload_ftps.py
+
       # ⚠️ Ohne diesen Schritt kann der Ablauf grün werden, während die Dateien
       # an der falschen Stelle liegen. Warum das dreimal passiert ist, steht in
       # pipeline/weather/pruefe_veroeffentlicht.py.
