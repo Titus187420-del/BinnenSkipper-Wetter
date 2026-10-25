@@ -56,7 +56,7 @@ jobs:
     # Seen aus. Umstellen erst nach einem Probelauf auf 26.04.
     runs-on: ubuntu-24.04
     # Vorhersage bauen ~8 min, Hochladen bis zu ~14 min Wiederholungen
-    # (upload_sftp.py), dazu die Gegenprobe.
+    # (upload_ftps.py), dazu die Gegenprobe.
     timeout-minutes: 38
     strategy:
       # ⚠️ fail-fast aus: Ein See, für den der DWD seinen Modelllauf noch nicht
@@ -147,33 +147,9 @@ jobs:
           WEATHER_OUT_DIR: dist
         run: python pipeline/weather/build_messung.py
 
-      - name: Auf den Webspace laden
-        env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASS: ${{ secrets.FTP_PASS }}
-          FTP_PORT: ${{ secrets.FTP_PORT }}
-          # ⚠️ OHNE DIESE ZEILE IST DAS SECRET WIRKUNGSLOS.
-          #
-          # Titus hat FTP_HOST_KEY am 2026-08-29 hinterlegt, trotzdem meldete
-          # jeder Lauf weiter „FTP_HOST_KEY ist nicht gesetzt" — weil kein
-          # Ablauf ihn an upload_sftp.py durchreichte. Ein Secret, das nur im
-          # Tresor liegt, prueft nichts. Ohne die Pruefung koennte sich ein
-          # fremder Server dazwischenschalten und das Webspace-Passwort im
-          # Klartext mitschneiden.
-          #
-          # Erst im Messwert-Ablauf erprobt (messung.yml), weil ein falscher
-          # Fingerprint den Upload abbricht — hier haetten dann alle fuenf Seen
-          # keine Vorhersage mehr bekommen. Der Lauf ed40e16 am 2026-09-01 war
-          # gruen, der Schluessel stimmt also.
-          FTP_HOST_KEY: ${{ secrets.FTP_HOST_KEY }}
-          WEATHER_OUT_DIR: dist
-          FTP_REMOTE_DIR: ${{ matrix.ziel }}
-        run: python pipeline/weather/upload_sftp.py
-
-      - name: Zusätzlich zu ALL-INKL laden (FTPS)
-        # Übergang Strato → ALL-INKL (seit 11.10.2026): dieselben Dateien gehen zusätzlich per FTPS
-        # an den neuen Webspace (upload_ftps.py, nur Standardbibliothek). Zielordner wie oben.
+      - name: Auf den Webspace laden (FTPS zu ALL-INKL)
+        # huggie.de liegt seit 25.10.2026 nur noch bei ALL-INKL (FTPS, upload_ftps.py, nur
+        # Standardbibliothek). Der frühere SFTP-Upload zu Strato ist entfernt.
         env:
           FTP_HOST: ${{ secrets.ALLINKL_FTP_HOST }}
           FTP_USER: ${{ secrets.ALLINKL_FTP_USER }}

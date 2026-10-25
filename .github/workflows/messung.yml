@@ -103,32 +103,9 @@ jobs:
       # binnenskipper), deshalb "wetter/brombachsee". Ein falscher Pfad schreibt
       # daneben und der Lauf bleibt trotzdem gruen — dagegen prueft der letzte
       # Schritt.
-      - name: Auf den Webspace laden
-        if: steps.pruefen.outputs.da == 'ja'
-        env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASS: ${{ secrets.FTP_PASS }}
-          FTP_PORT: ${{ secrets.FTP_PORT }}
-          # ⚠️ OHNE DIESE ZEILE IST DAS SECRET WIRKUNGSLOS.
-          #
-          # Titus hat FTP_HOST_KEY am 2026-08-29 hinterlegt, trotzdem meldete
-          # der Ablauf weiter „FTP_HOST_KEY ist nicht gesetzt" — weil KEIN
-          # Ablauf ihn an upload_sftp.py durchreichte. Ein Secret, das nur im
-          # Tresor liegt, prueft nichts.
-          #
-          # Kommt er an und passt er, steht im Protokoll „Host key verified".
-          # Passt er NICHT, bricht der Upload ab (Rueckgabewert 3) — das ist so
-          # gewollt: Dann meldet sich ein anderer Server als erwartet, und das
-          # Webspace-Passwort ginge im Klartext an ihn.
-          FTP_HOST_KEY: ${{ secrets.FTP_HOST_KEY }}
-          WEATHER_OUT_DIR: dist
-          FTP_REMOTE_DIR: wetter/brombachsee
-        run: python pipeline/weather/upload_sftp.py
-
-      - name: Zusätzlich zu ALL-INKL laden (FTPS)
-        # Übergang Strato → ALL-INKL (seit 11.10.2026): dieselben Dateien gehen zusätzlich per FTPS
-        # an den neuen Webspace (upload_ftps.py, nur Standardbibliothek). Zielordner wie oben.
+      - name: Auf den Webspace laden (FTPS zu ALL-INKL)
+        # huggie.de liegt seit 25.10.2026 nur noch bei ALL-INKL (FTPS, upload_ftps.py, nur
+        # Standardbibliothek). Der frühere SFTP-Upload zu Strato ist entfernt.
         if: steps.pruefen.outputs.da == 'ja'
         env:
           FTP_HOST: ${{ secrets.ALLINKL_FTP_HOST }}
