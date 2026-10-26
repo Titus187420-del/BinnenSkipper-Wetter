@@ -104,6 +104,11 @@ jobs:
             lon: "10.9272"
             ziel: wetter/brombachsee
             box: "10.76,49.02,11.1,49.25"
+          - see: forggensee
+            lat: "47.616"
+            lon: "10.735"
+            ziel: wetter/forggensee
+            box: "10.56,47.47,10.91,47.77"
 
     steps:
       - name: Auschecken
