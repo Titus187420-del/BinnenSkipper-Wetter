@@ -1,5 +1,11 @@
 name: Messwerte Brombachsee
 
+# ⚠️ SEIT 2026-10-30 NUR NOCH VON HAND. Den Regelbetrieb macht
+# webspace/binnenskipper/messung.php (Projekt Binnen-Skipper) per KAS-Cron alle
+# 15 Minuten: Die geplanten Laeufe hier kamen trotz 15-Minuten-Takt nur etwa alle
+# vier Stunden, die App verwirft Messwerte aber nach einer Stunde. Dieser Ablauf
+# bleibt als Reserve, deshalb kein Zeitplan mehr. Der Text unten ist Vorgeschichte.
+
 # Holt NUR die Messwerte der Wetterstation am Hauptdamm und legt sie als
 # messung.json auf den Webspace.
 #
@@ -31,8 +37,6 @@ name: Messwerte Brombachsee
 # rechnet GitHub keine Minuten ab.
 
 on:
-  schedule:
-    - cron: "4,19,34,49 * * * *"
   workflow_dispatch:
 
 concurrency:
